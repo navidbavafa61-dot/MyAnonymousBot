@@ -1835,20 +1835,23 @@ async def handle(
         save_json(
             REPORTS_FILE,
             reports
-        )
+        ) 
+try:
+    await context.bot.send_message(
+        ADMIN_ID,
+        "⚠️ گزارش جدید\n\n"
+        f"گزارش‌دهنده: {uid}\n"
+        f"گزارش‌شده: {reported}"
+    )
+    context.user_data.clear()
 
-        try:
+    await update.message.reply_text(
+        "✅ گزارش برای مدیر ارسال شد."
+    )
 
-            await context.bot.send_message(
-    ADMIN_ID,
-    "⚠️ گزارش جدید\n\n"
-    f"گزارش‌دهنده: {uid}\n"
-    f"گزارش‌شده: {reported}"
-        )
-            context.user_data.clear()
+    return
 
-await update.message.reply_text(
-    "✅ گزارش برای مدیر ارسال شد."
-)
-
-return
+except Exception as e:
+    print(f"خطا در ارسال گزارش به مدیر: {e}")
+    # اگر خواستی به کاربر خطا رو اطلاع بده، خط زیر رو از حالت کامنت خارج کن:
+    # await update.message.reply_text("❌ متاسفانه در ارسال گزارش خطایی پیش آمد.")

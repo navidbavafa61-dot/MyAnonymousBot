@@ -1840,6 +1840,15 @@ async def handle(
         try:
 
             await context.bot.send_message(
-                ADMIN_ID,
-                "⚠️ گزارش جدید\n\n"
-                f"گزارش‌
+    ADMIN_ID,
+    "⚠️ گزارش جدید\n\n"
+    f"گزارش‌دهنده: {uid}\n"
+    f"گزارش‌شده: {reported}"
+        )
+            context.user_data.clear()
+
+await update.message.reply_text(
+    "✅ گزارش برای مدیر ارسال شد."
+)
+
+return

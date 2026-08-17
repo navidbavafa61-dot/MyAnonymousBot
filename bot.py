@@ -23,6 +23,7 @@ import re
 # =========================================================
 
 TOKEN = "8847629801:AAGWhNJcs2dEXa4fSm2ygqw0gzkdl436iOA"
+
 ADMIN_ID = 8480569292
 
 USERS_FILE = "users.json"
@@ -76,7 +77,11 @@ settings = load_json(
         "sleep": False,
         "force_join": False,
         "channel": "",
-        "filter_enabled": False
+        "filter_enabled": False,
+        "bad_words": [
+            "spamword1",
+            "spamword2"
+        ]
     }
 )
 
@@ -89,6 +94,7 @@ MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["📩 ارسال ناشناس"],
         ["🔗 لینک من", "🆔 شناسه من"],
+        ["👤 پروفایل", "📊 آمار من"],
         ["📤 ارسال با لینک"],
         ["📋 بلاک‌ها", "👀 پیام را دیدم"],
         ["🚫 گزارش تخلف"]
@@ -115,14 +121,22 @@ ADMIN_MENU = ReplyKeyboardMarkup(
 # =========================================================
 
 def ensure_user(user):
+
     uid = str(user.id)
 
     if uid not in users:
+
         users[uid] = {
             "id": user.id,
             "first_name": user.first_name or "",
             "username": user.username or "",
-            "display_name": user.first_name or "کاربر"
+            "display_name": user.first_name or "کاربر",
+
+            # Phase 1 statistics
+            "sent": 0,
+            "received": 0,
+            "likes": 0,
+            "dislikes": 0
         }
 
         save_json(
@@ -130,17 +144,63 @@ def ensure_user(user):
             users
         )
 
+    else:
+
+        # اطلاعات کاربر را به‌روز می‌کنیم
+        users[uid]["first_name"] = user.first_name or ""
+        users[uid]["username"] = user.username or ""
+
+        if "display_name" not in users[uid]:
+            users[uid]["display_name"] = (
+                user.first_name or "کاربر"
+            )
+
+        if "sent" not in users[uid]:
+            users[uid]["sent"] = 0
+
+        if "received" not in users[uid]:
+            users[uid]["received"] = 0
+
+        if "likes" not in users[uid]:
+            users[uid]["likes"] = 0
+
+        if "dislikes" not in users[uid]:
+            users[uid]["dislikes"] = 0
+
     return users[uid]
 
 
+def increase_stat(user_id, stat):
+
+    uid = str(user_id)
+
+    if uid not in users:
+        return
+
+    if stat not in users[uid]:
+        users[uid][stat] = 0
+
+    users[uid][stat] += 1
+
+    save_json(
+        USERS_FILE,
+        users
+    )
+
+
 def is_blocked(blocker, target):
-    return str(target) in blocks.get(
-        str(blocker),
+
+    blocker = str(blocker)
+    target = str(target)
+
+    return target in blocks.get(
+        blocker,
         []
     )
 
 
 def block_user(blocker, target):
+
     blocker = str(blocker)
     target = str(target)
 
@@ -157,12 +217,14 @@ def block_user(blocker, target):
 
 
 def unblock_user(blocker, target):
+
     blocker = str(blocker)
     target = str(target)
 
     if blocker in blocks:
 
         if target in blocks[blocker]:
+
             blocks[blocker].remove(target)
 
     save_json(
@@ -173,10 +235,12 @@ def unblock_user(blocker, target):
 
 def get_display_name(user_id):
 
-    return users.get(
+    data = users.get(
         str(user_id),
         {}
-    ).get(
+    )
+
+    return data.get(
         "display_name",
         "کاربر"
     )
@@ -215,19 +279,24 @@ def contains_bad_word(text):
     ):
         return False
 
-    bad_words = [
-        "spamword1",
-        "spamword2"
-    ]
+    bad_words = settings.get(
+        "bad_words",
+        []
+    )
 
     lower = text.lower()
 
     for word in bad_words:
 
-        if word in lower:
+        if word.lower() in lower:
             return True
 
     return False
+
+
+def message_key(chat_id, message_id):
+
+    return f"{chat_id}:{message_id}"
 
 
 def save_message(
@@ -236,9 +305,17 @@ def save_message(
     receiver
 ):
 
-    messages[str(message_id)] = {
+    key = message_key(
+        receiver,
+        message_id
+    )
+
+    messages[key] = {
+        "message_id": message_id,
         "sender": sender,
-        "receiver": receiver
+        "receiver": receiver,
+        "likes": [],
+        "dislikes": []
     }
 
     save_json(
@@ -246,11 +323,40 @@ def save_message(
         messages
     )
 
+    return key
 
-def get_message_info(message_id):
+
+def get_message_info(
+    chat_id,
+    message_id
+):
+
+    key = message_key(
+        chat_id,
+        message_id
+    )
 
     return messages.get(
-        str(message_id)
+        key
+    )
+
+
+def set_message_info(
+    chat_id,
+    message_id,
+    data
+):
+
+    key = message_key(
+        chat_id,
+        message_id
+    )
+
+    messages[key] = data
+
+    save_json(
+        MESSAGES_FILE,
+        messages
     )
 
 
@@ -266,20 +372,16 @@ async def start(
     if not update.effective_user:
         return
 
-    if not update.message:
-        return
-
     user = update.effective_user
-
     uid = user.id
 
     ensure_user(user)
 
     context.user_data.clear()
 
-    # =====================================================
-    # LINK
-    # =====================================================
+    # -------------------------
+    # START LINK
+    # -------------------------
 
     if context.args:
 
@@ -325,13 +427,8 @@ async def start(
 
                     return
 
-                context.user_data[
-                    "target"
-                ] = target_id
-
-                context.user_data[
-                    "mode"
-                ] = "anonymous"
+                context.user_data["target"] = target_id
+                context.user_data["mode"] = "anonymous"
 
                 await update.message.reply_text(
                     "✏️ پیام ناشناس خودت را بنویس:"
@@ -339,13 +436,14 @@ async def start(
 
                 return
 
-    # =====================================================
+    # -------------------------
     # SLEEP
-    # =====================================================
+    # -------------------------
 
-    if settings.get(
-        "sleep"
-    ) and uid != ADMIN_ID:
+    if (
+        settings.get("sleep")
+        and uid != ADMIN_ID
+    ):
 
         await update.message.reply_text(
             "😴 ربات موقتاً در حالت خواب است."
@@ -353,9 +451,9 @@ async def start(
 
         return
 
-    # =====================================================
+    # -------------------------
     # ADMIN
-    # =====================================================
+    # -------------------------
 
     if uid == ADMIN_ID:
 
@@ -366,13 +464,14 @@ async def start(
 
         return
 
-    # =====================================================
+    # -------------------------
     # USER
-    # =====================================================
+    # -------------------------
 
     await update.message.reply_text(
         f"👋 سلام {user.first_name or 'کاربر'}!\n\n"
-        "به ربات پیام ناشناس خوش آمدی.",
+        "📬 به Navid's Mailbox خوش آمدی.\n"
+        "اینجا می‌توانی پیام ناشناس دریافت و ارسال کنی.",
         reply_markup=MAIN_MENU
     )
 
@@ -387,7 +486,6 @@ async def send_anonymous(
 ):
 
     user = update.effective_user
-
     uid = user.id
 
     text = update.message.text
@@ -429,9 +527,7 @@ async def send_anonymous(
 
         return
 
-    if contains_bad_word(
-        text
-    ):
+    if contains_bad_word(text):
 
         await update.message.reply_text(
             "⚠️ پیام به دلیل فیلتر محتوا ارسال نشد."
@@ -499,6 +595,27 @@ async def send_anonymous(
             target
         )
 
+        increase_stat(
+            uid,
+            "sent"
+        )
+
+        increase_stat(
+            target,
+            "received"
+        )
+
+        # اعلان ساده برای گیرنده
+        try:
+
+            await context.bot.send_message(
+                chat_id=target,
+                text="🔔 یک پیام ناشناس جدید برایت دریافت شد."
+            )
+
+        except Exception:
+            pass
+
         await update.message.reply_text(
             "✅ پیام ناشناس ارسال شد.",
             reply_markup=MAIN_MENU
@@ -523,8 +640,8 @@ async def send_anonymous(
 # =========================================================
 
 async def callback(
-    update,
-    context
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     query = update.callback_query
@@ -543,9 +660,7 @@ async def callback(
 
     try:
 
-        sender_id = int(
-            value
-        )
+        sender_id = int(value)
 
     except Exception:
 
@@ -570,13 +685,8 @@ async def callback(
 
             return
 
-        context.user_data[
-            "reply_to"
-        ] = sender_id
-
-        context.user_data[
-            "mode"
-        ] = "reply"
+        context.user_data["reply_to"] = sender_id
+        context.user_data["mode"] = "reply"
 
         await query.message.reply_text(
             "✏️ پاسخ خودت را بنویس:"
@@ -631,8 +741,81 @@ async def callback(
 
     if action == "like":
 
+        info = get_message_info(
+            current_user,
+            query.message.message_id
+        )
+
+        if not info:
+
+            await query.message.reply_text(
+                "❌ اطلاعات پیام پیدا نشد."
+            )
+
+            return
+
+        likes = info.setdefault(
+            "likes",
+            []
+        )
+
+        dislikes = info.setdefault(
+            "dislikes",
+            []
+        )
+
+        if current_user in likes:
+
+            await query.message.reply_text(
+                "👍 قبلاً لایک کرده‌ای."
+            )
+
+            return
+
+        if current_user in dislikes:
+
+            dislikes.remove(
+                current_user
+            )
+
+            sender = info.get(
+                "receiver"
+            )
+
+            if str(sender) in users:
+                users[str(sender)]["dislikes"] = max(
+                    0,
+                    users[str(sender)].get("dislikes", 0) - 1
+                )
+
+        likes.append(
+            current_user
+        )
+
+        sender = info.get(
+            "sender"
+        )
+
+        if str(sender) in users:
+
+            users[str(sender)]["likes"] = (
+                users[str(sender)].get("likes", 0) + 1
+            )
+
+        set_message_info(
+            current_user,
+            query.message.message_id,
+            info
+        )
+
+        save_json(
+            USERS_FILE,
+            users
+        )
+
         await query.message.reply_text(
-            "👍 واکنش شما ثبت شد."
+            f"👍 ثبت شد.\n"
+            f"تعداد لایک: {len(likes)}"
         )
 
         return
@@ -643,8 +826,82 @@ async def callback(
 
     if action == "dislike":
 
+        info = get_message_info(
+            current_user,
+            query.message.message_id
+        )
+
+        if not info:
+
+            await query.message.reply_text(
+                "❌ اطلاعات پیام پیدا نشد."
+            )
+
+            return
+
+        likes = info.setdefault(
+            "likes",
+            []
+        )
+
+        dislikes = info.setdefault(
+            "dislikes",
+            []
+        )
+
+        if current_user in dislikes:
+
+            await query.message.reply_text(
+                "👎 قبلاً ثبت کرده‌ای."
+            )
+
+            return
+
+        if current_user in likes:
+
+            likes.remove(
+                current_user
+            )
+
+            sender = info.get(
+                "sender"
+            )
+
+            if str(sender) in users:
+
+                users[str(sender)]["likes"] = max(
+                    0,
+                    users[str(sender)].get("likes", 0) - 1
+                )
+
+        dislikes.append(
+            current_user
+        )
+
+        sender = info.get(
+            "sender"
+        )
+
+        if str(sender) in users:
+
+            users[str(sender)]["dislikes"] = (
+                users[str(sender)].get("dislikes", 0) + 1
+            )
+
+        set_message_info(
+            current_user,
+            query.message.message_id,
+            info
+        )
+
+        save_json(
+            USERS_FILE,
+            users
+        )
+
         await query.message.reply_text(
-            "👎 واکنش شما ثبت شد."
+            f"👎 ثبت شد.\n"
+            f"تعداد دیسلایک: {len(dislikes)}"
         )
 
         return
@@ -702,6 +959,25 @@ async def callback(
             "⚠️ گزارش برای مدیر ارسال شد."
         )
 
+        return
+
+    # =====================================================
+    # UNBLOCK
+    # =====================================================
+
+    if action == "unblock":
+
+        unblock_user(
+            current_user,
+            sender_id
+        )
+
+        await query.message.reply_text(
+            "🔓 کاربر آنبلاک شد."
+        )
+
+        return
+
 
 # =========================================================
 # ADMIN
@@ -713,7 +989,6 @@ async def admin_message(
 ):
 
     user = update.effective_user
-
     uid = user.id
 
     text = update.message.text
@@ -737,10 +1012,7 @@ async def admin_message(
 
                 await context.bot.send_message(
                     chat_id=int(user_id),
-                    text=(
-                        "📢 پیام مدیریت:\n\n"
-                        + text
-                    )
+                    text="📢 پیام مدیریت:\n\n" + text
                 )
 
                 sent += 1
@@ -811,10 +1083,34 @@ async def admin_message(
 
     if text == "📊 آمار":
 
+        total_sent = sum(
+            int(u.get("sent", 0))
+            for u in users.values()
+        )
+
+        total_received = sum(
+            int(u.get("received", 0))
+            for u in users.values()
+        )
+
+        total_likes = sum(
+            int(u.get("likes", 0))
+            for u in users.values()
+        )
+
+        total_dislikes = sum(
+            int(u.get("dislikes", 0))
+            for u in users.values()
+        )
+
         await update.message.reply_text(
-            "📊 آمار ربات\n\n"
+            "📊 آمار کامل ربات\n\n"
             f"👥 کاربران: {len(users)}\n"
             f"🔗 لینک‌ها: {len(links)}\n"
+            f"📨 پیام‌های ارسالی: {total_sent}\n"
+            f"📩 پیام‌های دریافتی: {total_received}\n"
+            f"👍 لایک‌ها: {total_likes}\n"
+            f"👎 دیسلایک‌ها: {total_dislikes}\n"
             f"⚠️ گزارش‌ها: {len(reports)}"
         )
 
@@ -848,7 +1144,7 @@ async def admin_message(
 
             await update.message.reply_text(
                 "❌ کانال تنظیم نشده.\n"
-                "با /setchannel کانال را تنظیم کن."
+                "با /setchannel @channel تنظیمش کن."
             )
 
             return True
@@ -869,34 +1165,33 @@ async def admin_message(
 
     if text == "⚙️ تنظیمات":
 
-        status = (
+        filter_status = (
             "فعال"
-            if settings.get(
-                "filter_enabled"
-            )
+            if settings.get("filter_enabled")
+            else "غیرفعال"
+        )
+
+        sleep_status = (
+            "فعال"
+            if settings.get("sleep")
             else "غیرفعال"
         )
 
         channel = (
-            settings.get(
-                "channel"
-            )
+            settings.get("channel")
             or "تنظیم نشده"
         )
 
-        sleep = (
-            "فعال"
-            if settings.get(
-                "sleep"
-            )
-            else "غیرفعال"
-        )
-
         await update.message.reply_text(
-            "⚙️ تنظیمات\n\n"
-            f"فیلتر: {status}\n"
-            f"حالت خواب: {sleep}\n"
-            f"کانال: {channel}\n\n"
+            "⚙️ تنظیمات ربات\n\n"
+            f"🛡️ فیلتر: {filter_status}\n"
+            f"😴 خواب: {sleep_status}\n"
+            f"📢 کانال: {channel}\n\n"
+            "دستورات:\n"
+            "/sleep\n"
+            "/wake\n"
+            "/filter_on\n"
+            "/filter_off\n"
             "/setchannel @channel"
         )
 
@@ -918,27 +1213,25 @@ async def admin_message(
         )
 
         status = (
-            "فعال"
-            if settings.get(
-                "sleep"
-            )
-            else "غیرفعال"
+            "فعال 😴"
+            if settings["sleep"]
+            else "غیرفعال ☀️"
         )
 
         await update.message.reply_text(
-            f"😴 حالت خواب: {status}"
+            f"حالت خواب: {status}"
         )
 
         return True
 
     # =====================================================
-    # BACK
+    # USER MENU
     # =====================================================
 
     if text == "🔙 منوی کاربر":
 
         await update.message.reply_text(
-            "👤 منوی کاربر",
+            "منوی کاربر",
             reply_markup=MAIN_MENU
         )
 
@@ -948,7 +1241,7 @@ async def admin_message(
 
 
 # =========================================================
-# HANDLE
+# MAIN HANDLER
 # =========================================================
 
 async def handle(
@@ -960,7 +1253,6 @@ async def handle(
         return
 
     user = update.effective_user
-
     uid = user.id
 
     text = update.message.text
@@ -979,56 +1271,65 @@ async def handle(
         ):
             return
 
+        # پاسخ مدیر
+        if context.user_data.get(
+            "mode"
+        ) == "reply":
+
+            target = context.user_data.get(
+                "reply_to"
+            )
+
+            if target:
+
+                try:
+
+                    await context.bot.send_message(
+                        chat_id=target,
+                        text="📨 پاسخ ناشناس:\n\n" + text
+                    )
+
+                    increase_stat(
+                        uid,
+                        "sent"
+                    )
+
+                    increase_stat(
+                        target,
+                        "received"
+                    )
+
+                    await update.message.reply_text(
+                        "✅ پاسخ ارسال شد."
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "REPLY ERROR:",
+                        e
+                    )
+
+                    await update.message.reply_text(
+                        "❌ ارسال پاسخ ناموفق بود."
+                    )
+
+            context.user_data.clear()
+
+            return
+
     # =====================================================
-    # REPLY
+    # SLEEP
     # =====================================================
 
-    if context.user_data.get(
-        "mode"
-    ) == "reply":
+    if (
+        settings.get("sleep")
+        and uid != ADMIN_ID
+    ):
 
-        target = context.user_data.get(
-            "reply_to"
+        await update.message.reply_text(
+            "😴 ربات موقتاً خاموش است."
         )
-
-        if target:
-
-            if is_blocked(
-                target,
-                uid
-            ):
-
-                await update.message.reply_text(
-                    "❌ این کاربر شما را بلاک کرده است."
-                )
-
-                context.user_data.clear()
-
-                return
-
-            try:
-
-                await context.bot.send_message(
-                    chat_id=target,
-                    text="📨 پاسخ:\n\n" + text
-                )
-
-                await update.message.reply_text(
-                    "✅ پاسخ ارسال شد."
-                )
-
-            except Exception as e:
-
-                print(
-                    "REPLY ERROR:",
-                    e
-                )
-
-                await update.message.reply_text(
-                    "❌ ارسال پاسخ ناموفق بود."
-                )
-
-        context.user_data.clear()
 
         return
 
@@ -1048,17 +1349,212 @@ async def handle(
         return
 
     # =====================================================
-    # SEND TO
+    # REPLY
+    # =====================================================
+
+    if context.user_data.get(
+        "mode"
+    ) == "reply":
+
+        target = context.user_data.get(
+            "reply_to"
+        )
+
+        if not target:
+
+            context.user_data.clear()
+
+            return
+
+        if is_blocked(
+            uid,
+            target
+        ):
+
+            await update.message.reply_text(
+                "❌ این کاربر را بلاک کرده‌ای."
+            )
+
+            context.user_data.clear()
+
+            return
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=target,
+                text="📨 پاسخ ناشناس:\n\n" + text
+            )
+
+            increase_stat(
+                uid,
+                "sent"
+            )
+
+            increase_stat(
+                target,
+                "received"
+            )
+
+            await update.message.reply_text(
+                "✅ پاسخ ارسال شد."
+            )
+
+        except Exception as e:
+
+            print(
+                "REPLY ERROR:",
+                e
+            )
+
+            await update.message.reply_text(
+                "❌ ارسال پاسخ ناموفق بود."
+            )
+
+        context.user_data.clear()
+
+        return
+
+    # =====================================================
+    # SEND ANONYMOUS
     # =====================================================
 
     if text == "📩 ارسال ناشناس":
 
         context.user_data[
             "mode"
-        ] = "anonymous_target"
+        ] = "target"
 
         await update.message.reply_text(
-            "🆔 شناسه عددی گیرنده را بفرست:"
+            "🆔 شناسه عددی کاربر را بفرست:"
+        )
+
+        return
+
+    # =====================================================
+    # TARGET
+    # =====================================================
+
+    if context.user_data.get(
+        "mode"
+    ) == "target":
+
+        try:
+
+            target = int(text)
+
+        except Exception:
+
+            await update.message.reply_text(
+                "❌ شناسه باید عددی باشد."
+            )
+
+            return
+
+        if target == uid:
+
+            await update.message.reply_text(
+                "❌ نمی‌توانی به خودت پیام بفرستی."
+            )
+
+            return
+
+        if str(target) not in users:
+
+            await update.message.reply_text(
+                "❌ این کاربر هنوز ربات را فعال نکرده است."
+            )
+
+            return
+
+        if is_blocked(
+            target,
+            uid
+        ):
+
+            await update.message.reply_text(
+                "❌ این کاربر شما را بلاک کرده است."
+            )
+
+            return
+
+        context.user_data[
+            "target"
+        ] = target
+
+        context.user_data[
+            "mode"
+        ] = "anonymous"
+
+        await update.message.reply_text(
+            "✏️ حالا پیام خودت را بنویس:"
+        )
+
+        return
+
+    # =====================================================
+    # PROFILE
+    # =====================================================
+
+    if text == "👤 پروفایل":
+
+        data = users.get(
+            str(uid),
+            {}
+        )
+
+        username = data.get(
+            "username"
+        )
+
+        username_text = (
+            f"@{username}"
+            if username
+            else "ندارد"
+        )
+
+        await update.message.reply_text(
+            "👤 پروفایل شما\n\n"
+            f"📛 نام: {data.get('display_name', 'کاربر')}\n"
+            f"🆔 شناسه: {uid}\n"
+            f"🔗 یوزرنیم: {username_text}\n\n"
+            f"📤 پیام‌های ارسالی: {data.get('sent', 0)}\n"
+            f"📥 پیام‌های دریافتی: {data.get('received', 0)}\n"
+            f"👍 لایک‌ها: {data.get('likes', 0)}\n"
+            f"👎 دیسلایک‌ها: {data.get('dislikes', 0)}"
+        )
+
+        return
+
+    # =====================================================
+    # USER STATS
+    # =====================================================
+
+    if text == "📊 آمار من":
+
+        data = users.get(
+            str(uid),
+            {}
+        )
+
+        await update.message.reply_text(
+            "📊 آمار شما\n\n"
+            f"📤 ارسال شده: {data.get('sent', 0)}\n"
+            f"📥 دریافت شده: {data.get('received', 0)}\n"
+            f"👍 لایک: {data.get('likes', 0)}\n"
+            f"👎 دیسلایک: {data.get('dislikes', 0)}"
+        )
+
+        return
+
+    # =====================================================
+    # MY ID
+    # =====================================================
+
+    if text == "🆔 شناسه من":
+
+        await update.message.reply_text(
+            f"🆔 شناسه اختصاصی شما:\n\n{uid}"
         )
 
         return
@@ -1072,77 +1568,114 @@ async def handle(
         bot = await context.bot.get_me()
 
         link = (
-            f"https://t.me/{bot.username}?start=link_{uid}"
+            f"https://t.me/{bot.username}"
+            f"?start=link_{uid}"
+        )
+
+        links[str(uid)] = uid
+
+        save_json(
+            LINKS_FILE,
+            links
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔗 ارسال پیام ناشناس",
+                        url=link
+                    )
+                ]
+            ]
         )
 
         await update.message.reply_text(
-            f"🔗 لینک ناشناس شما:\n\n{link}"
+            "🔗 لینک ناشناس شما:\n\n"
+            f"{link}",
+            reply_markup=keyboard
         )
 
         return
 
     # =====================================================
-    # MY ID
-    # =====================================================
-
-    if text == "🆔 شناسه من":
-
-        await update.message.reply_text(
-            f"🆔 شناسه شما:\n\n`{uid}`",
-            parse_mode="Markdown"
-        )
-
-        return
-
-    # =====================================================
-    # SEND BY LINK
+    # SEND WITH LINK
     # =====================================================
 
     if text == "📤 ارسال با لینک":
 
-        await update.message.reply_text(
-            "✏️ لینک ناشناس گیرنده را بفرست:"
-        )
-
         context.user_data[
             "mode"
-        ] = "link_send"
+        ] = "link"
+
+        await update.message.reply_text(
+            "🔗 لینک ناشناس را بفرست:"
+        )
 
         return
 
     # =====================================================
-    # BLOCK LIST
+    # LINK
     # =====================================================
 
-    if text == "📋 بلاک‌ها":
+    if context.user_data.get(
+        "mode"
+    ) == "link":
 
-        my_blocks = blocks.get(
-            str(uid),
-            []
+        match = re.search(
+            r"start=link_(\d+)",
+            text
         )
 
-        if not my_blocks:
+        if not match:
 
             await update.message.reply_text(
-                "🚫 لیست بلاک شما خالی است."
+                "❌ لینک نامعتبر است."
             )
 
             return
 
-        result = "🚫 لیست بلاک شما:\n\n"
+        target = int(
+            match.group(1)
+        )
 
-        for b in my_blocks:
+        if str(target) not in users:
 
-            name = get_display_name(
-                b
+            await update.message.reply_text(
+                "❌ این لینک معتبر نیست."
             )
 
-            result += (
-                f"• {name} (ID: {b})\n"
+            return
+
+        if target == uid:
+
+            await update.message.reply_text(
+                "❌ این لینک متعلق به خودت است."
             )
+
+            return
+
+        if is_blocked(
+            target,
+            uid
+        ):
+
+            await update.message.reply_text(
+                "❌ این کاربر شما را بلاک کرده است."
+            )
+
+            return
+
+        context.user_data[
+            "target"
+        ] = target
+
+        context.user_data[
+            "mode"
+        ] = "anonymous"
 
         await update.message.reply_text(
-            result
+            "✏️ پیام ناشناس را بنویس:"
         )
 
         return
@@ -1160,7 +1693,7 @@ async def handle(
         if not sender:
 
             await update.message.reply_text(
-                "❌ پیامی برای تأیید وجود ندارد."
+                "❌ پیام قبلی پیدا نشد."
             )
 
             return
@@ -1176,16 +1709,73 @@ async def handle(
                 "👀 اطلاع داده شد."
             )
 
-        except Exception as e:
-
-            print(
-                "SEEN ERROR:",
-                e
-            )
+        except Exception:
 
             await update.message.reply_text(
-                "❌ خطا در ارسال اطلاعیه."
+                "❌ خطا."
             )
+
+        return
+
+    # =====================================================
+    # BLOCK LIST
+    # =====================================================
+
+    if text == "📋 بلاک‌ها":
+
+        blocked = blocks.get(
+            str(uid),
+            []
+        )
+
+        if not blocked:
+
+            await update.message.reply_text(
+                "📋 لیست بلاک خالی است."
+            )
+
+            return
+
+        lines = []
+
+        keyboard_rows = []
+
+        for i, blocked_id in enumerate(
+            blocked,
+            start=1
+        ):
+
+            lines.append(
+                f"{i}. {blocked_id}"
+            )
+
+            keyboard_rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"🔓 آنبلاک {blocked_id}",
+                        callback_data=f"unblock:{blocked_id}"
+                    )
+                ]
+            )
+
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    "🔓 آنبلاک همه",
+                    callback_data="unblockall:0"
+                )
+            ]
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            keyboard_rows
+        )
+
+        await update.message.reply_text(
+            "🚫 بلاکی‌های شما:\n\n"
+            + "\n".join(lines),
+            reply_markup=keyboard
+        )
 
         return
 
@@ -1195,182 +1785,33 @@ async def handle(
 
     if text == "🚫 گزارش تخلف":
 
-        await update.message.reply_text(
-            "✏️ شناسه عددی کاربر متخلف را بفرست:"
-        )
-
         context.user_data[
             "mode"
-        ] = "report_user"
+        ] = "report"
+
+        await update.message.reply_text(
+            "🆔 شناسه کاربری که می‌خواهی گزارش کنی را بفرست:"
+        )
 
         return
 
     # =====================================================
-    # TARGET
+    # REPORT PROCESS
     # =====================================================
 
     if context.user_data.get(
         "mode"
-    ) == "anonymous_target":
+    ) == "report":
 
         try:
 
-            target = int(
-                text
-            )
+            reported = int(text)
 
-        except:
+        except Exception:
 
             await update.message.reply_text(
-                "❌ شناسه باید عددی باشد."
+                "❌ شناسه نامعتبر است."
             )
-
-            context.user_data.clear()
-
-            return
-
-        if target == uid:
-
-            await update.message.reply_text(
-                "❌ نمی‌توانی به خودت پیام بفرستی."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        if str(target) not in users:
-
-            await update.message.reply_text(
-                "❌ این کاربر در ربات ثبت نشده است."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        if is_blocked(
-            target,
-            uid
-        ):
-
-            await update.message.reply_text(
-                "❌ این کاربر شما را بلاک کرده است."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        context.user_data[
-            "target"
-        ] = target
-
-        context.user_data[
-            "mode"
-        ] = "anonymous"
-
-        await update.message.reply_text(
-            "✏️ پیام ناشناس خودت را بنویس:"
-        )
-
-        return
-
-    # =====================================================
-    # LINK SEND
-    # =====================================================
-
-    if context.user_data.get(
-        "mode"
-    ) == "link_send":
-
-        match = re.search(
-            r"link_(\d+)",
-            text
-        )
-
-        if not match:
-
-            await update.message.reply_text(
-                "❌ لینک نامعتبر است."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        target = int(
-            match.group(1)
-        )
-
-        if str(target) not in users:
-
-            await update.message.reply_text(
-                "❌ این لینک معتبر نیست."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        if target == uid:
-
-            await update.message.reply_text(
-                "❌ نمی‌توانی به خودت پیام بفرستی."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        if is_blocked(
-            target,
-            uid
-        ):
-
-            await update.message.reply_text(
-                "❌ این کاربر شما را بلاک کرده است."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        context.user_data[
-            "target"
-        ] = target
-
-        context.user_data[
-            "mode"
-        ] = "anonymous"
-
-        await update.message.reply_text(
-            "✏️ پیام ناشناس خودت را بنویس:"
-        )
-
-        return
-
-    # =====================================================
-    # REPORT USER
-    # =====================================================
-
-    if context.user_data.get(
-        "mode"
-    ) == "report_user":
-
-        try:
-
-            reported = int(
-                text
-            )
-
-        except:
-
-            await update.message.reply_text(
-                "❌ شناسه باید عددی باشد."
-            )
-
-            context.user_data.clear()
 
             return
 
@@ -1399,181 +1840,6 @@ async def handle(
         try:
 
             await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    f"⚠️ گزارش جدید\n\n"
-                    f"گزارش‌دهنده: {uid}\n"
-                    f"گزارش‌شده: {reported}"
-                )
-            )
-
-        except:
-            pass
-
-        await update.message.reply_text(
-            "✅ گزارش شما ثبت شد."
-        )
-
-        context.user_data.clear()
-
-        return
-
-    # =====================================================
-    # DEFAULT
-    # =====================================================
-
-    await update.message.reply_text(
-        "❌ از دکمه‌های منو استفاده کن.",
-        reply_markup=MAIN_MENU
-    )
-
-
-# =========================================================
-# COMMANDS
-# =========================================================
-
-async def setchannel(
-    update,
-    context
-):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    if not context.args:
-
-        await update.message.reply_text(
-            "مثال:\n/setchannel @my_channel"
-        )
-
-        return
-
-    channel = context.args[0]
-
-    settings["channel"] = channel
-
-    save_json(
-        SETTINGS_FILE,
-        settings
-    )
-
-    await update.message.reply_text(
-        f"✅ کانال تنظیم شد:\n{channel}"
-    )
-
-
-async def filter_command(
-    update,
-    context
-):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    if not context.args:
-
-        await update.message.reply_text(
-            "مثال:\n/filter on\n/filter off"
-        )
-
-        return
-
-    status = context.args[0].lower()
-
-    if status == "on":
-
-        settings["filter_enabled"] = True
-
-        await update.message.reply_text(
-            "🔞 فیلتر محتوا فعال شد."
-        )
-
-    elif status == "off":
-
-        settings["filter_enabled"] = False
-
-        await update.message.reply_text(
-            "🔞 فیلتر محتوا غیرفعال شد."
-        )
-
-    else:
-
-        await update.message.reply_text(
-            "❌ مقدار نامعتبر. از on یا off استفاده کن."
-        )
-
-        return
-
-    save_json(
-        SETTINGS_FILE,
-        settings
-    )
-
-
-# =========================================================
-# ERROR
-# =========================================================
-
-async def error_handler(
-    update,
-    context
-):
-
-    print(
-        "ERROR:",
-        context.error
-    )
-
-
-# =========================================================
-# RUN
-# =========================================================
-
-app = (
-    Application
-    .builder()
-    .token(TOKEN)
-    .build()
-)
-
-app.add_handler(
-    CommandHandler(
-        "start",
-        start
-    )
-)
-
-app.add_handler(
-    CommandHandler(
-        "setchannel",
-        setchannel
-    )
-)
-
-app.add_handler(
-    CommandHandler(
-        "filter",
-        filter_command
-    )
-)
-
-app.add_handler(
-    CallbackQueryHandler(
-        callback
-    )
-)
-
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle
-    )
-)
-
-app.add_error_handler(
-    error_handler
-)
-
-print("✅ ربات V3 روشن شد!")
-
-app.run_polling()
+                ADMIN_ID,
+                "⚠️ گزارش جدید\n\n"
+                f"گزارش‌

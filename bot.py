@@ -942,8 +942,8 @@ async def callback(
         )
 
         try:
-
-            await context.bot.send_message(
+            # اصلاح: await حذف شد
+            context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
                     "⚠️ گزارش جدید\n\n"
@@ -955,7 +955,8 @@ async def callback(
         except Exception:
             pass
 
-        await query.message.reply_text(
+        # اصلاح: await حذف شد
+        query.message.reply_text(
             "⚠️ گزارش برای مدیر ارسال شد."
         )
 
@@ -1804,54 +1805,3 @@ async def handle(
     ) == "report":
 
         try:
-
-            reported = int(text)
-
-        except Exception:
-
-            await update.message.reply_text(
-                "❌ شناسه نامعتبر است."
-            )
-
-            return
-
-        if reported == uid:
-
-            await update.message.reply_text(
-                "❌ نمی‌توانی خودت را گزارش کنی."
-            )
-
-            context.user_data.clear()
-
-            return
-
-        reports.append(
-            {
-                "reporter": uid,
-                "reported": reported
-            }
-        )
-
-        save_json(
-            REPORTS_FILE,
-            reports
-        ) 
-try:
-    await context.bot.send_message(
-        ADMIN_ID,
-        "⚠️ گزارش جدید\n\n"
-        f"گزارش‌دهنده: {uid}\n"
-        f"گزارش‌شده: {reported}"
-    )
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        "✅ گزارش برای مدیر ارسال شد."
-    )
-
-    return
-
-except Exception as e:
-    print(f"خطا در ارسال گزارش به مدیر: {e}")
-    # اگر خواستی به کاربر خطا رو اطلاع بده، خط زیر رو از حالت کامنت خارج کن:
-    # await update.message.reply_text("❌ متاسفانه در ارسال گزارش خطایی پیش آمد.")

@@ -1841,4 +1841,5 @@ async def handle(
 
             await context.bot.send_message(
                 ADMIN_ID,
-                "⚠️ گزارش جدید\n\n"f"گزارش‌
+                "⚠️ گزارش جدید\n\n"
+                f"گزارش‌
